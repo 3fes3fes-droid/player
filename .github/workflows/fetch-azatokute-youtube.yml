@@ -58,6 +58,9 @@ jobs:
               except Exception:
                   counts[p.name] = 0
                   continue
+              if not isinstance(data, dict):
+                  counts[p.name] = 0
+                  continue
               entries = data.get("entries") or []
               c = 0
               for e in entries:
