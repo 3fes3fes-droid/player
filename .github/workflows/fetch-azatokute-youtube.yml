@@ -1,0 +1,96 @@
+name: Fetch Azatokute YouTube IDs
+
+on:
+  push:
+    branches:
+      - chatgpt-yt-fetch
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-all:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt-yt-fetch
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install yt-dlp
+        run: python -m pip install -U yt-dlp
+
+      - name: Fetch every public upload
+        shell: bash
+        run: |
+          set -u
+          mkdir -p tmp_azatokute
+          URLS=(
+            "https://www.youtube.com/playlist?list=UU1qicJIDF8N9ObDvz8s3AgQ"
+            "https://www.youtube.com/channel/UC1qicJIDF8N9ObDvz8s3AgQ/videos"
+            "https://www.youtube.com/channel/UC1qicJIDF8N9ObDvz8s3AgQ/shorts"
+            "https://www.youtube.com/channel/UC1qicJIDF8N9ObDvz8s3AgQ/streams"
+          )
+          i=0
+          for u in "${URLS[@]}"; do
+            i=$((i+1))
+            echo "=== source $i: $u ==="
+            python -m yt_dlp --flat-playlist --ignore-errors --dump-single-json "$u" > "tmp_azatokute/source_$i.json" 2> "tmp_azatokute/source_$i.err" || true
+            wc -c "tmp_azatokute/source_$i.json" || true
+            tail -n 30 "tmp_azatokute/source_$i.err" || true
+          done
+
+          python - <<'PY'
+          import json, re, pathlib, datetime
+          root = pathlib.Path("tmp_azatokute")
+          ids = []
+          seen = set()
+          counts = {}
+          for p in sorted(root.glob("source_*.json")):
+              try:
+                  data = json.loads(p.read_text(encoding="utf-8"))
+              except Exception:
+                  counts[p.name] = 0
+                  continue
+              entries = data.get("entries") or []
+              c = 0
+              for e in entries:
+                  if not isinstance(e, dict):
+                      continue
+                  vid = e.get("id") or e.get("url")
+                  if isinstance(vid, str) and re.fullmatch(r"[A-Za-z0-9_-]{11}", vid):
+                      c += 1
+                      if vid not in seen:
+                          seen.add(vid)
+                          ids.append(vid)
+              counts[p.name] = c
+          out = {
+              "channelId": "UC1qicJIDF8N9ObDvz8s3AgQ",
+              "uploadsPlaylistId": "UU1qicJIDF8N9ObDvz8s3AgQ",
+              "generatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "count": len(ids),
+              "sourceCounts": counts,
+              "ids": ids,
+          }
+          pathlib.Path("azatokute_youtube_all_ids.json").write_text(
+              json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8"
+          )
+          print(json.dumps({"count": len(ids), "sourceCounts": counts}, ensure_ascii=False))
+          if len(ids) < 500:
+              raise SystemExit(f"Too few IDs: {len(ids)}")
+          PY
+
+      - name: Commit collected IDs
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add azatokute_youtube_all_ids.json
+          git commit -m "Fetch all Azatokute YouTube IDs" || exit 0
+          git push origin HEAD:chatgpt-yt-fetch
